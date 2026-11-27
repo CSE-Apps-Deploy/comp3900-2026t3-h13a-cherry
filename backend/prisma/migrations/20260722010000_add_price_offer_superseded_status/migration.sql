@@ -1,0 +1,1 @@
+ALTER TYPE "BookingPriceOfferStatus" ADD VALUE IF NOT EXISTS 'SUPERSEDED';

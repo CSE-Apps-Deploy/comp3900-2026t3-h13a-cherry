@@ -1,0 +1,155 @@
+import { getDatePartsInTimezone, resolveLocalTime, zonedTimeToUtc } from './formatters';
+
+export const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
+export const DAY_LABELS = {
+  0: 'Sun',
+  1: 'Mon',
+  2: 'Tue',
+  3: 'Wed',
+  4: 'Thu',
+  5: 'Fri',
+  6: 'Sat',
+};
+
+export const HOURS = Array.from({ length: 24 }, (_, index) => index);
+
+export const SLOT_MINUTES = [0, 30];
+
+// Half-hour rows (00:00, 00:30, 01:00, ...) used by the learner booking grid.
+export const HALF_HOUR_STEPS = HOURS.flatMap((hour) =>
+  SLOT_MINUTES.map((minute) => ({ hour, minute }))
+);
+
+export const buildCellKey = (dayOfWeek, hour) => `${dayOfWeek}-${hour}`;
+
+const readHour = (value, fallback) => {
+  const hour = Number.parseInt(String(value || '').slice(0, 2), 10);
+  return Number.isNaN(hour) ? fallback : hour;
+};
+
+const formatHour = (hour) => `${String(hour).padStart(2, '0')}:00`;
+
+export const cloneSlots = (slots = []) =>
+  slots.map((slot) => ({
+    dayOfWeek: String(slot?.dayOfWeek),
+    startTime: slot?.startTime,
+    endTime: slot?.endTime,
+    ...(slot?.timezone ? { timezone: slot.timezone } : {}),
+  }));
+
+export const slotsToCells = (slots = []) => {
+  const cells = new Set();
+
+  slots.forEach((slot) => {
+    const dayOfWeek = Number(slot?.dayOfWeek);
+    const startHour = readHour(slot?.startTime, 0);
+    const endHour = readHour(slot?.endTime, startHour);
+
+    for (let hour = startHour; hour < endHour; hour += 1) {
+      cells.add(buildCellKey(dayOfWeek, hour));
+    }
+  });
+
+  return cells;
+};
+
+export const cellsToSlots = (cells) => {
+  return DAY_ORDER.flatMap((dayOfWeek) => {
+    const hours = HOURS.filter((hour) => cells.has(buildCellKey(dayOfWeek, hour)));
+    if (hours.length === 0) return [];
+
+    const groups = [];
+    let start = hours[0];
+    let prev = hours[0];
+
+    for (let i = 1; i < hours.length; i++) {
+      const cur = hours[i];
+      if (cur === prev + 1) {
+        prev = cur;
+        continue;
+      }
+
+      groups.push({ dayOfWeek: String(dayOfWeek), startTime: formatHour(start), endTime: formatHour(prev + 1) });
+      start = cur;
+      prev = cur;
+    }
+
+    groups.push({ dayOfWeek: String(dayOfWeek), startTime: formatHour(start), endTime: formatHour(prev + 1) });
+    return groups;
+  });
+};
+
+const addDaysToLocalDate = ({ year, month, day }, days) => {
+  const date = new Date(Date.UTC(year, month - 1, day + days));
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+  };
+};
+
+export const getWeekStart = (date = new Date(), weekOffset = 0, timezone = null) => {
+  if (timezone) {
+    const parts = getDatePartsInTimezone(date, timezone);
+    const diff = (parts.dayOfWeek + 6) % 7;
+    const weekStart = addDaysToLocalDate(parts, -diff + weekOffset * 7);
+    return zonedTimeToUtc({ ...weekStart, hour: 0 }, timezone);
+  }
+
+  const base = new Date(date);
+  const diff = (base.getDay() + 6) % 7;
+  base.setHours(0, 0, 0, 0);
+  base.setDate(base.getDate() - diff + weekOffset * 7);
+  return base;
+};
+
+export const getSlotDate = (dayOfWeek, hour, weekOffset = 0, timezone = null, minute = 0) => {
+  const start = getWeekStart(new Date(), weekOffset, timezone);
+  const date = new Date(start);
+  const offset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+
+  if (timezone) {
+    const startParts = getDatePartsInTimezone(start, timezone);
+    const slotDate = addDaysToLocalDate(startParts, offset);
+    return zonedTimeToUtc({ ...slotDate, hour, minute }, timezone);
+  }
+
+  date.setDate(start.getDate() + offset);
+  date.setHours(hour, minute, 0, 0);
+  return date;
+};
+
+export const resolveSlotInstants = (dayOfWeek, hour, weekOffset = 0, timezone = null, minute = 0) => {
+  const start = getWeekStart(new Date(), weekOffset, timezone);
+  const offset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+
+  if (!timezone) {
+    const date = new Date(start);
+    date.setDate(start.getDate() + offset);
+    date.setHours(hour, minute, 0, 0);
+    return { type: 'unique', instants: [date] };
+  }
+
+  const startParts = getDatePartsInTimezone(start, timezone);
+  const slotDate = addDaysToLocalDate(startParts, offset);
+  return resolveLocalTime({ ...slotDate, hour, minute }, timezone);
+};
+
+// Advances a slot by whole weeks on the local calendar, so DST shifts don't skew the time.
+export const addWeeksToSlot = (date, weeks, timezone = null) => {
+  // No advancement: keep the exact instant the user picked. Round-tripping it through local
+  // parts would collapse a chosen ambiguous occurrence back to the earlier of the two.
+  if (weeks === 0) return new Date(date);
+
+  if (!timezone) {
+    const next = new Date(date);
+    next.setDate(next.getDate() + weeks * 7);
+    return next;
+  }
+
+  const parts = getDatePartsInTimezone(date, timezone);
+  const localDate = addDaysToLocalDate(parts, weeks * 7);
+  const { instants } = resolveLocalTime({ ...localDate, hour: parts.hour, minute: parts.minute }, timezone);
+  return instants[0] || null;
+};

@@ -1,0 +1,2 @@
+ALTER TABLE "bookings"
+ADD COLUMN "version" INTEGER NOT NULL DEFAULT 1;

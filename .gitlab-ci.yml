@@ -1,0 +1,25 @@
+image: node:22-bookworm
+
+stages:
+  - test
+  - build
+default:
+  before_script:
+    - corepack enable
+    - corepack prepare pnpm@10.15.0 --activate
+    - pnpm install --frozen-lockfile
+
+backend_test:
+  stage: test
+  script:
+    - pnpm --filter tutorconnect-backend test
+
+frontend_test:
+  stage: test
+  script:
+    - pnpm --filter tutorconnect-frontend test
+
+frontend_build:
+  stage: build
+  script:
+    - pnpm --filter tutorconnect-frontend build

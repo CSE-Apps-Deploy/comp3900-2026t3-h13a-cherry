@@ -1,0 +1,457 @@
+// src/app/(app)/tutor/dashboard/page.jsx - Tutor Dashboard
+'use client';
+
+import Link from 'next/link';
+import { useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import {
+  CalendarDaysIcon,
+  CurrencyDollarIcon,
+  StarIcon,
+  ClockIcon,
+  CheckCircleIcon,
+  ChatBubbleLeftRightIcon,
+  ArrowRightIcon,
+  ExclamationTriangleIcon,
+} from '@heroicons/react/24/outline';
+import { bookingApi, paymentApi, tutorApi } from '../../../../lib/api-entry';
+import { getPrimarySummary } from '../../../../lib/earnings';
+import { getAvatarUrl } from '../../../../lib/avatar';
+import { appendTimezoneName, formatCurrency, formatDuration, formatShortDateTime as formatDate, getUserTimezone } from '../../../../lib/formatters';
+import {
+  getRecurringLabel,
+  isRecurringBooking,
+} from '../../../../lib/recurring-bookings';
+import { useAuthStore } from '../../../../lib/store';
+import BookingCalendar from '../../../../components/BookingCalendar';
+import { cn } from '../../../../lib/utils';
+
+export default function TutorDashboardPage() {
+  const { user } = useAuthStore();
+  const [mounted, setMounted] = useState(false);
+  const currentUserId = user?.id || '';
+
+  const [time, setTime] = useState(new Date());
+
+  useEffect(() => {
+    const timerId = setInterval(() => {
+      setTime(new Date());
+    }, 1000);
+
+    return () => clearInterval(timerId);
+  }, []);
+
+  const timeZone = getUserTimezone(user);
+
+  const formattedTime = appendTimezoneName(time.toLocaleTimeString('en-AU', {
+    timeZone,
+  }), time, timeZone);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const displayName = `${user?.firstName || ''} ${user?.lastName || ''}`.trim();
+
+  const { data: requestsData, isLoading: requestsLoading } = useQuery({
+    queryKey: ['tutor-requests', currentUserId, 'PENDING'],
+    queryFn: () => bookingApi.getTutorBookings({ status: 'PENDING', limit: 200 }),
+    enabled: mounted && !!currentUserId,
+  });
+
+  const { data: allBookingsData, isLoading: allBookingsLoading } = useQuery({
+    queryKey: ['tutor-bookings-all', currentUserId],
+    queryFn: () => bookingApi.getTutorBookings({ limit: 100 }),
+    enabled: mounted && !!currentUserId,
+  });
+
+  const { data: myProfileData, isLoading: myProfileLoading } = useQuery({
+    queryKey: ['tutor-public-profile-id', currentUserId],
+    queryFn: () => tutorApi.getMyProfile(),
+    enabled: mounted && user?.role === 'TUTOR' && !!currentUserId,
+    retry: false,
+  });
+
+  const { data: payoutAccountData } = useQuery({
+    queryKey: ['payout-account'],
+    queryFn: () => paymentApi.getPayoutAccount(),
+    enabled: mounted && user?.role === 'TUTOR',
+    retry: false,
+  });
+  const {
+    data: earningsData,
+    isLoading: earningsLoading,
+    isError: earningsError,
+  } = useQuery({
+    queryKey: ['tutor-earnings', 'dashboard'],
+    queryFn: () => paymentApi.getEarnings({ page: 1, limit: 1 }),
+    enabled: mounted && user?.role === 'TUTOR',
+    retry: false,
+  });
+
+  const payoutAccount = payoutAccountData?.data?.data;
+  // Only nudge once we actually know the state, and never when payouts are
+  // unavailable in this environment.
+  const needsPayoutSetup = Boolean(
+    payoutAccount && !payoutAccount.isPayoutReady && payoutAccount.status !== 'UNAVAILABLE'
+  );
+
+  const pendingRequestBookings = requestsData?.data?.data?.bookings || [];
+  const requests = pendingRequestBookings.filter(
+    (booking, index, bookings) =>
+      !booking?.recurringGroupId ||
+      bookings.findIndex((entry) => entry?.recurringGroupId === booking.recurringGroupId) === index
+  );
+  const pendingRequestPreview = requests.slice(0, 5);
+  const allBookings = allBookingsData?.data?.data?.bookings || [];
+  const now = new Date();
+  const upcomingSessions = [...allBookings]
+    .filter((booking) => {
+      const scheduledAt = new Date(booking?.scheduledAt || 0);
+      return booking?.status === 'ACCEPTED' && scheduledAt >= now;
+    })
+    .sort((left, right) => new Date(left.scheduledAt) - new Date(right.scheduledAt));
+  const upcomingPreview = upcomingSessions.slice(0, 5);
+  const myProfile = myProfileData?.data?.data || null;
+  const tutorProfileId = myProfile?.id || user?.tutorProfileId || user?.tutorProfile?.id || null;
+  const tutorProfileStatus = myProfile?.status || user?.tutorProfile?.status || null;
+  const hasTutorProfile = Boolean(tutorProfileId);
+
+  const completedBookings = allBookings.filter((booking) => booking.status === 'COMPLETED');
+  const earningsSummary = getPrimarySummary(
+    earningsData?.data?.data?.summaries,
+    myProfile?.currency || 'AUD'
+  );
+  const tutorPublicId = tutorProfileId;
+  const viewAsLearnerHref = tutorPublicId ? `/tutors/${tutorPublicId}` : '/tutor/profile';
+  const viewAsLearnerNavHref = viewAsLearnerHref.startsWith('/tutors/')
+    ? `${viewAsLearnerHref}?from=tutor-dashboard`
+    : viewAsLearnerHref;
+
+  const stats = [
+    {
+      label: 'Pending Requests',
+      value: requests.length,
+      icon: ClockIcon,
+      color: 'text-yellow-600 bg-yellow-50',
+      href: '/tutor/requests?status=PENDING',
+    },
+    {
+      label: 'Upcoming Sessions',
+      value: upcomingSessions.length,
+      icon: CalendarDaysIcon,
+      color: 'text-blue-600 bg-blue-50',
+      href: '/tutor/requests?status=ACCEPTED',
+    },
+    {
+      label: 'Completed Sessions',
+      value: completedBookings.length,
+      icon: CheckCircleIcon,
+      color: 'text-green-600 bg-green-50',
+      href: '/tutor/requests?status=COMPLETED',
+    },
+    {
+      label: 'Net Earnings',
+      value: earningsLoading
+        ? '—'
+        : earningsError
+          ? 'Unavailable'
+          : formatCurrency(earningsSummary.netAmount, earningsSummary.currency),
+      icon: CurrencyDollarIcon,
+      color: 'text-purple-600 bg-purple-50',
+      href: '/tutor/payouts',
+      note: earningsError
+        ? 'Open earnings to retry'
+        : 'After refunds and TutorConnect commission',
+    },
+  ];
+
+  if (!mounted) {
+    return <div className="space-y-5" />;
+  }
+
+  if (mounted && user?.role === 'TUTOR' && !!currentUserId && myProfileLoading && !user?.tutorProfile) {
+    return <div className="space-y-5" />;
+  }
+
+  if (!hasTutorProfile || tutorProfileStatus !== 'ACTIVE') {
+    const title = !hasTutorProfile
+      ? 'Complete Your Tutor Profile'
+      : tutorProfileStatus === 'PENDING'
+        ? 'Tutor Verification In Review'
+        : 'Tutor Verification Required';
+    const description = !hasTutorProfile
+      ? 'Set up your profile to start receiving booking requests from learners.'
+      : tutorProfileStatus === 'PENDING'
+        ? 'Your tutor application is under admin review. Open your profile to review your submission.'
+        : 'Your tutor profile is not active yet. Open your profile to review feedback and update your submission.';
+    const actionLabel = !hasTutorProfile ? 'Set Up Profile' : 'Open Tutor Profile';
+
+    return (
+      <div className="max-w-lg mx-auto text-center py-16">
+        <StarIcon className="w-16 h-16 mx-auto text-gray-300 mb-4" />
+        <h2 className="text-xl font-bold text-gray-900 mb-2">{title}</h2>
+        <p className="text-gray-500 mb-6 text-sm">{description}</p>
+        <Link href="/tutor/profile" className="btn-primary">
+          {actionLabel}
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex rounded-2xl bg-gradient-to-r from-primary-600 to-primary-500 p-4 text-white sm:p-5 items-center">
+        <div className='flex-1'>
+          <p className="text-primary-200 text-xs font-medium mb-0.5">Good day 👋</p>
+          <h1 className="text-xl font-bold">{displayName}</h1>
+          <p className="text-primary-200 text-sm mt-1">Welcome back, {user?.firstName}! Here's your overview.</p>
+        </div>
+        <div className='text-xl font-bold'>
+          {formattedTime}
+        </div>
+      </div>
+
+      {needsPayoutSetup && (
+        <Link
+          href="/tutor/payouts"
+          className="block rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-800 hover:bg-amber-100 transition-colors"
+        >
+          <div className="flex items-start gap-3">
+            <ExclamationTriangleIcon className="w-5 h-5 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold">Finish your payout setup</p>
+              <p className="text-sm mt-0.5">
+                You can accept free trial lessons now, but paid bookings need payout setup
+                completed first.
+              </p>
+            </div>
+          </div>
+        </Link>
+      )}
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
+        {stats.map((stat) => (
+          <div
+            key={stat.label}
+            className={cn(
+              'card p-4',
+              stat.href && 'cursor-pointer hover:shadow-md transition-shadow'
+            )}
+          >
+            {stat.href ? (
+              <Link href={stat.href} className="block h-full">
+                <StatCardContent stat={stat} />
+              </Link>
+            ) : (
+              <StatCardContent stat={stat} />
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="card p-5">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-gray-900">Pending Requests</h2>
+          <Link
+            href="/tutor/requests"
+            className="text-sm text-primary-600 hover:underline flex items-center gap-1"
+          >
+            View all <ArrowRightIcon className="w-3.5 h-3.5" />
+          </Link>
+        </div>
+        {requestsLoading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-12 bg-gray-100 rounded animate-pulse" />
+            ))}
+          </div>
+        ) : requests.length === 0 ? (
+          <p className="text-gray-400 text-sm py-4 text-center">No pending requests</p>
+        ) : (
+          <div className="space-y-2">
+            {pendingRequestPreview.map((booking) => {
+              const learner = booking.learner;
+              const recurring = isRecurringBooking(booking);
+              return (
+                <Link
+                  key={booking.id}
+                  href={`/bookings/${booking.id}?returnTo=${encodeURIComponent('/tutor/dashboard')}&from=tutor-dashboard`}
+                  className="flex items-start gap-3 rounded-lg p-3 transition-colors hover:bg-gray-50"
+                >
+                  <img
+                    src={getAvatarUrl(learner?.avatar, learner?.firstName, learner?.lastName, {
+                      fallbackName: 'Learner',
+                      ignoreTemporary: true,
+                    })}
+                    alt=""
+                    className="w-9 h-9 rounded-full object-cover"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-sm text-gray-900">
+                      {learner?.firstName} {learner?.lastName}
+                    </p>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                      <p className="text-xs text-gray-500">
+                        {booking.subject} · {formatDate(booking.scheduledAt, timeZone)}
+                      </p>
+                      {recurring && (
+                        <span className="rounded-full border border-sky-100 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700">
+                          {getRecurringLabel(booking)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <span className="mt-0.5 shrink-0 rounded-full bg-yellow-50 px-2 py-0.5 text-xs font-medium text-yellow-700">
+                    Pending
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="card p-5">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-gray-900">Upcoming Sessions</h2>
+          <Link
+            href="/bookings?from=tutor-dashboard"
+            className="text-sm text-primary-600 hover:underline flex items-center gap-1"
+          >
+            View all <ArrowRightIcon className="w-3.5 h-3.5" />
+          </Link>
+        </div>
+        {allBookingsLoading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-12 bg-gray-100 rounded animate-pulse" />
+            ))}
+          </div>
+        ) : upcomingPreview.length === 0 ? (
+          <p className="text-sm font-semibold text-gray-900">No upcoming sessions</p>
+        ) : (
+          <div className="space-y-2">
+            {upcomingPreview.map((booking) => {
+              const learner = booking.learner;
+              return (
+                <Link
+                  key={booking.id}
+                  href={`/bookings/${booking.id}?returnTo=${encodeURIComponent('/tutor/dashboard')}&from=tutor-dashboard`}
+                  className="flex items-start gap-3 rounded-lg p-3 transition-colors hover:bg-gray-50"
+                >
+                  <img
+                    src={getAvatarUrl(learner?.avatar, learner?.firstName, learner?.lastName, {
+                      fallbackName: 'Learner',
+                      ignoreTemporary: true,
+                    })}
+                    alt=""
+                    className="w-9 h-9 rounded-full object-cover"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-sm text-gray-900">
+                      {learner?.firstName} {learner?.lastName}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {booking.subject} · {formatDate(booking.scheduledAt, timeZone)} ·{' '}
+                      {formatDuration(booking.duration)}
+                    </p>
+                  </div>
+                  <span className="mt-0.5 shrink-0 rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">
+                    Confirmed
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="card p-4">
+        <BookingCalendar
+          bookings={allBookings}
+          isTutor={true}
+          returnTo="/tutor/dashboard"
+          timezone={timeZone}
+        />
+      </div>
+
+      <div className="card p-5">
+        <h2 className="text-sm font-semibold text-gray-900">Quick Actions</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {[
+            {
+              label: 'Manage Profile',
+              desc: 'Update subjects, rates, availability',
+              href: '/tutor/profile',
+              color: 'bg-primary-600',
+            },
+            {
+              label: 'Booking Requests',
+              desc: 'Accept or decline requests',
+              href: '/tutor/requests',
+              color: 'bg-green-600',
+            },
+            {
+              label: 'Messages',
+              desc: 'Open learner chats',
+              href: '/messages',
+              color: 'bg-blue-600',
+            },
+            {
+              label: 'View as Learner',
+              desc: 'See your public profile',
+              href: viewAsLearnerNavHref,
+              color: 'bg-purple-600',
+            },
+          ].map((item) => (
+            <Link
+              key={item.label}
+              href={item.href}
+              className="card p-5 hover:shadow-md transition-shadow group"
+            >
+              <div
+                className={cn(
+                  'w-10 h-10 rounded-lg mb-3 flex items-center justify-center',
+                  item.color
+                )}
+              >
+                {item.label === 'Messages' ? (
+                  <ChatBubbleLeftRightIcon className="w-5 h-5 text-white" />
+                ) : (
+                  <ArrowRightIcon className="w-5 h-5 text-white group-hover:translate-x-0.5 transition-transform" />
+                )}
+              </div>
+              <h3 className="font-semibold text-gray-900 text-sm">{item.label}</h3>
+              <p className="text-xs text-gray-500 mt-0.5">{item.desc}</p>
+            </Link>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatCardContent({ stat }) {
+  return (
+    <div className="flex h-full min-w-0 flex-col gap-2.5">
+      <div
+        className={cn(
+          'flex h-9 w-9 items-center justify-center rounded-xl flex-shrink-0',
+          stat.color
+        )}
+      >
+        <stat.icon className="w-5 h-5" />
+      </div>
+      <div className="flex-1">
+        <p className="text-2xl font-bold text-gray-900">
+          {stat.value}
+        </p>
+        <p className="mt-0.5 text-xs text-gray-500 whitespace-nowrap">
+          {stat.label}
+        </p>
+        {stat.note && <p className="mt-1 text-[11px] leading-4 text-gray-400">{stat.note}</p>}
+      </div>
+    </div>
+  );
+}

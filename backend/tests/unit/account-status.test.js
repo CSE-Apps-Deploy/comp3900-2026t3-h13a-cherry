@@ -1,0 +1,22 @@
+require('express-async-errors');
+const express = require('express');
+const request = require('supertest');
+const { hashPassword } = require('../../src/utils/passwords');
+const { createAccessToken, createRefreshToken } = require('../../src/utils/tokens');
+let user;
+const prisma = { user: { findUnique: async () => user, update: async ({ data }) => Object.assign(user, data) } };
+const databasePath = require.resolve('../../src/config/database');
+require.cache[databasePath] = { id: databasePath, filename: databasePath, loaded: true, exports: { prisma } };
+const app = express();app.use(express.json());app.use('/auth', require('../../src/routes/auth'));
+app.get('/private', require('../../src/middleware/auth').authenticate, (req, res) => res.json({ id: req.user.id }));
+beforeEach(() => { user = { id: 'account', email: 'account@example.com', role: 'LEARNER', status: 'ACTIVE', isEmailVerified: true, password: hashPassword('LocalDemo1!') }; });
+test.each(['SUSPENDED', 'DEACTIVATED'])('%s blocks login, existing access and refresh; reactivation restores access', async (status) => {
+  const access = createAccessToken(user), refreshToken = createRefreshToken(user);
+  user.status = status;
+  expect((await request(app).post('/auth/login').send({ email: user.email, password: 'LocalDemo1!' })).status).toBe(403);
+  expect((await request(app).get('/private').set('Authorization', 'Bearer ' + access)).status).toBe(403);
+  expect((await request(app).post('/auth/refresh-token').send({ refreshToken })).status).toBe(403);
+  user.status = 'ACTIVE';
+  expect((await request(app).post('/auth/login').send({ email: user.email, password: 'LocalDemo1!' })).status).toBe(200);
+  expect((await request(app).get('/private').set('Authorization', 'Bearer ' + access)).status).toBe(200);
+});

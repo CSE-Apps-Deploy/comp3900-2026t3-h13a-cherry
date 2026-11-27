@@ -1,0 +1,1012 @@
+// Prisma Schema for TutorConnect App
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== ENUMS ====================
+
+enum Role {
+  LEARNER
+  TUTOR
+  ADMIN
+  SYSTEM_ADMIN
+}
+
+enum ProfileStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum BookingStatus {
+  UNPAID
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+  COMPLETED
+  NOT_COMPLETED
+  RESCHEDULED
+}
+
+enum RecurringType {
+  ONE_OFF
+  WEEKLY
+  FORTNIGHTLY
+  MONTHLY
+}
+
+enum MeetingTool {
+  GOOGLE_MEET
+  ZOOM
+  MICROSOFT_TEAMS
+  SKYPE
+  OTHER
+}
+
+enum SessionType {
+  ONLINE
+  IN_PERSON
+  HYBRID
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+}
+
+enum ConversationType {
+  DIRECT
+  SUPPORT
+}
+
+enum ConversationStatus {
+  OPEN
+  CLOSED
+}
+
+enum SubscriptionPlan {
+  FREE
+  BASIC
+  PREMIUM
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  EXPIRED
+  TRIAL
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  PAID
+  COMPLETED
+  FAILED
+  CREDITED
+  PARTIALLY_REFUNDED
+  REFUNDED
+  CANCELLED
+}
+
+enum PaymentAcceptanceMode {
+  TUTOR_ACCEPT
+  LEARNER_ACCEPT_TUTOR_TIME
+}
+
+enum PaymentAttemptSource {
+  ACCEPTANCE
+  RETRY
+  LEGACY
+}
+
+enum PaymentAttemptOutcome {
+  PROCESSING
+  SUCCEEDED
+  FAILED
+}
+
+enum PayoutAccountStatus {
+  NOT_STARTED // row exists, tutor never entered the hosted flow
+  ONBOARDING_INCOMPLETE // details not submitted, or requirements currently due
+  PENDING_VERIFICATION // submitted, provider reviewing; nothing for the tutor to do
+  RESTRICTED // payouts disabled / past due / disabled reason set
+  READY // payouts enabled, transfers active, nothing outstanding
+}
+
+enum PayoutStatus {
+  PENDING
+  ELIGIBLE
+  PROCESSING
+  DISPUTED
+  PAID
+  FAILED
+}
+
+enum CompletionReviewStatus {
+  AWAITING_LEARNER
+  DISPUTED
+  CLEARED
+  RESOLVED_LEARNER
+}
+
+enum RefundStatus {
+  PROCESSING
+  SUCCEEDED
+  FAILED
+}
+
+enum RefundSource {
+  TUTOR_NON_COMPLETION
+  ADMIN_COMPLETION_DISPUTE
+}
+
+enum CompletionResolution {
+  LEGACY_CLEARED
+  LEARNER_CONFIRMED
+  WINDOW_EXPIRED
+  ADMIN_APPROVED_TUTOR
+  ADMIN_CONFIRMED_TRIAL
+  TUTOR_REPORTED_NOT_COMPLETED
+  ADMIN_REFUNDED_LEARNER
+  ADMIN_RESOLVED_LEARNER_TRIAL
+}
+
+enum PayoutRunStatus {
+  PROCESSING
+  COMPLETED
+  PARTIALLY_FAILED
+  FAILED
+}
+
+enum PayoutTransferStatus {
+  PROCESSING
+  SUCCEEDED
+  FAILED
+}
+
+enum CreditTransactionType {
+  CREDIT
+  DEBIT
+}
+
+enum SubjectRequestStatus {
+  OPEN
+  ACCEPTED
+  CANCELLED
+}
+
+enum RescheduleRequestStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+  COUNTERED
+}
+
+enum BookingNegotiationStatus {
+  NONE
+  TIME_PROPOSED_BY_TUTOR
+  TIME_PROPOSED_BY_LEARNER
+}
+
+enum BookingProposalActor {
+  LEARNER
+  TUTOR
+}
+
+enum BookingPriceOfferStatus {
+  PENDING
+  ACCEPTED
+  SUPERSEDED
+  REJECTED
+  WITHDRAWN
+  CANCELLED
+}
+
+// ==================== USER ====================
+
+model User {
+  id                           String        @id @default(uuid())
+  email                        String        @unique
+  password                     String
+  role                         Role          @default(LEARNER)
+  status                       ProfileStatus @default(ACTIVE)
+  firstName                    String
+  lastName                     String
+  avatar                       String?
+  phone                        String?
+  dateOfBirth                  DateTime?
+  bio                          String?
+  preferredLang                String        @default("en")
+  timezone                     String?
+  isEmailVerified              Boolean       @default(false)
+  emailVerificationToken       String?       @unique
+  emailVerificationExpiry      DateTime?
+  passwordResetAt              DateTime?
+  preferredMeetingTool         MeetingTool?
+  stripeCustomerId             String?       @unique
+  stripeDefaultPaymentMethodId String?
+  createdAt                    DateTime      @default(now())
+  updatedAt                    DateTime      @updatedAt
+  lastLoginAt                  DateTime?
+
+  // Relations
+  learnerProfile            LearnerProfile?
+  tutorProfile              TutorProfile?
+  sentMessages              Message[]                 @relation("SentMessages")
+  receivedMessages          Message[]                 @relation("ReceivedMessages")
+  conversations             ConversationParticipant[]
+  bookingsAsLearner         Booking[]                 @relation("LearnerBookings")
+  rescheduleRequests        RescheduleRequest[]       @relation("LearnerRescheduleRequests")
+  decidedRescheduleRequests RescheduleRequest[]       @relation("DecidedRescheduleRequests")
+  writtenReviews            Review[]                  @relation("LearnerReviews")
+  subscription              Subscription?
+  payments                  Payment[]
+  refreshTokens             RefreshToken[]
+  passwordResetTokens       PasswordResetToken[]
+  adminActions              AdminAction[]             @relation("AdminActioner")
+  adminTargeted             AdminAction[]             @relation("AdminTarget")
+  notifications             Notification[]            @relation("Notification")
+  creditTransactions        CreditTransaction[]
+  subjectRequests           SubjectRequest[]          @relation("LearnerSubjectRequests")
+  payoutRuns                PayoutRun[]               @relation("PayoutRunAdmin")
+  resolvedCompletionReviews Booking[]                 @relation("CompletionReviewResolver")
+  initiatedRefunds          PaymentRefund[]           @relation("RefundInitiator")
+
+  @@index([email])
+  @@index([role])
+  @@index([status])
+  @@map("users")
+}
+
+// ==================== PROFILES ====================
+
+model LearnerProfile {
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  gradeLevel         String?
+  learningGoals      String?
+  subjects           String[] // subjects they want to learn
+  preferredStyle     String? // visual, auditory, kinesthetic
+  // Parent / Guardian fields (for minors)
+  isMinor            Boolean  @default(false)
+  parentName         String?
+  parentEmail        String?
+  parentPhone        String?
+  parentRelationship String? // mother, father, guardian, etc.
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("learner_profiles")
+}
+
+model TutorProfile {
+  id                            String        @id @default(uuid())
+  userId                        String        @unique
+  status                        ProfileStatus @default(PENDING)
+  applicationSubmitted          Boolean       @default(false)
+  headline                      String?
+  hourlyRate                    Decimal       @default(0) @db.Decimal(10, 2)
+  trialLessonLimit              Int           @default(0)
+  cancellationCutoffHours       Int           @default(24)
+  lateCancellationRefundPercent Int           @default(0)
+  currency                      String        @default("AUD")
+  yearsExperience               Int           @default(0)
+  education                     Json[] // [{institution, degree, field, year}]
+  certifications                Json[] // [{name, issuer, year, url}]
+  languages                     String[]      @default(["English"])
+  sessionTypes                  SessionType[] @default([ONLINE])
+  location                      String?
+  latitude                      Decimal?      @db.Decimal(10, 8)
+  longitude                     Decimal?      @db.Decimal(11, 8)
+  rating                        Decimal       @default(0) @db.Decimal(3, 2)
+  totalReviews                  Int           @default(0)
+  totalSessions                 Int           @default(0)
+  isVerified                    Boolean       @default(false)
+  verifiedAt                    DateTime?
+  responseTime                  Int? // avg response time in minutes
+  createdAt                     DateTime      @default(now())
+  updatedAt                     DateTime      @updatedAt
+
+  // Session duration options (in minutes)
+  sessionDurations     Int[]        @default([60]) // e.g. [30, 60, 90]
+  preferredMeetingTool MeetingTool?
+
+  user                    User                            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subjects                TutorSubject[]
+  availability            TutorAvailability[]
+  availabilityOverrides   TutorAvailabilityOverrideWeek[]
+  bookings                Booking[]                       @relation("TutorBookings")
+  rescheduleRequests      RescheduleRequest[]             @relation("TutorRescheduleRequests")
+  reviews                 Review[]
+  acceptedSubjectRequests SubjectRequest[]                @relation("AcceptedSubjectRequests")
+  payoutAccount           TutorPayoutAccount?
+  payoutTransfers         PayoutTransfer[]
+
+  @@index([status])
+  @@index([rating])
+  @@index([hourlyRate])
+  @@map("tutor_profiles")
+}
+
+/// PAY-05: the tutor's connected payout account at the payment provider.
+/// Stores provider identifiers plus booleans and counts derived from the
+/// provider's account object. It never stores bank credentials, identity
+/// documents, or the requirement field names themselves.
+model TutorPayoutAccount {
+  id              String @id @default(uuid())
+  tutorProfileId  String @unique
+  stripeAccountId String @unique
+
+  country         String  @default("AU")
+  defaultCurrency String?
+
+  // Derived readiness, persisted so the acceptance guard stays a single
+  // indexed lookup with no provider round-trip on the hot path.
+  status        PayoutAccountStatus @default(NOT_STARTED)
+  isPayoutReady Boolean             @default(false)
+
+  detailsSubmitted         Boolean   @default(false)
+  chargesEnabled           Boolean   @default(false)
+  payoutsEnabled           Boolean   @default(false)
+  transfersCapability      String? // active | pending | inactive
+  disabledReason           String? // raw provider string; never serialized to any client
+  currentlyDueCount        Int       @default(0)
+  pastDueCount             Int       @default(0)
+  eventuallyDueCount       Int       @default(0)
+  pendingVerificationCount Int       @default(0)
+  requirementsDueAt        DateTime?
+
+  onboardingStartedAt   DateTime?
+  onboardingCompletedAt DateTime?
+  lastSyncedAt          DateTime?
+  // event.created of the newest applied account.updated, so out-of-order
+  // provider events cannot un-ready a tutor who has just finished.
+  lastEventCreatedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tutorProfile TutorProfile @relation(fields: [tutorProfileId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([isPayoutReady])
+  @@map("tutor_payout_accounts")
+}
+
+model Subject {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  category    String
+  description String?
+  createdAt   DateTime @default(now())
+
+  tutors           TutorSubject[]
+  resolvedRequests SubjectRequest[]
+
+  @@index([category])
+  @@map("subjects")
+}
+
+model TutorSubject {
+  id          String  @id @default(uuid())
+  tutorId     String
+  subjectId   String
+  level       String
+  description String?
+  hourlyRate  Decimal @db.Decimal(10, 2)
+
+  tutor   TutorProfile @relation(fields: [tutorId], references: [id], onDelete: Cascade)
+  subject Subject      @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([tutorId, subjectId])
+  @@map("tutor_subjects")
+}
+
+model SubjectRequest {
+  id                String               @id @default(uuid())
+  learnerId         String
+  subjectName       String
+  category          String
+  description       String
+  status            SubjectRequestStatus @default(OPEN)
+  resolvedSubjectId String?
+  acceptedTutorId   String?
+  acceptedAt        DateTime?
+  cancelledAt       DateTime?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  learner         User          @relation("LearnerSubjectRequests", fields: [learnerId], references: [id], onDelete: Cascade)
+  resolvedSubject Subject?      @relation(fields: [resolvedSubjectId], references: [id], onDelete: SetNull)
+  acceptedTutor   TutorProfile? @relation("AcceptedSubjectRequests", fields: [acceptedTutorId], references: [id], onDelete: SetNull)
+
+  @@index([learnerId, status])
+  @@index([status, createdAt])
+  @@index([acceptedTutorId, status])
+  @@map("subject_requests")
+}
+
+model TutorAvailability {
+  id        String @id @default(uuid())
+  tutorId   String
+  dayOfWeek Int
+  startTime String
+  endTime   String
+  timezone  String @default("UTC")
+
+  tutor TutorProfile @relation(fields: [tutorId], references: [id], onDelete: Cascade)
+
+  @@index([tutorId])
+  @@map("tutor_availability")
+}
+
+model TutorAvailabilityOverrideWeek {
+  id        String   @id @default(uuid())
+  tutorId   String
+  weekStart DateTime
+  timezone  String   @default("UTC")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tutor TutorProfile                    @relation(fields: [tutorId], references: [id], onDelete: Cascade)
+  slots TutorAvailabilityOverrideSlot[]
+
+  @@unique([tutorId, weekStart])
+  @@index([tutorId, weekStart])
+  @@map("tutor_availability_override_weeks")
+}
+
+model TutorAvailabilityOverrideSlot {
+  id             String @id @default(uuid())
+  overrideWeekId String
+  dayOfWeek      Int
+  startTime      String
+  endTime        String
+
+  overrideWeek TutorAvailabilityOverrideWeek @relation(fields: [overrideWeekId], references: [id], onDelete: Cascade)
+
+  @@index([overrideWeekId])
+  @@map("tutor_availability_override_slots")
+}
+
+// ==================== BOOKINGS ====================
+
+model Booking {
+  id                             String                   @id @default(uuid())
+  learnerId                      String
+  tutorId                        String
+  subject                        String
+  status                         BookingStatus            @default(PENDING)
+  sessionType                    SessionType              @default(ONLINE)
+  scheduledAt                    DateTime
+  duration                       Int
+  hourlyRate                     Decimal                  @db.Decimal(10, 2)
+  totalAmount                    Decimal                  @db.Decimal(10, 2)
+  isTrialLesson                  Boolean                  @default(false)
+  currency                       String                   @default("AUD")
+  notes                          String?
+  meetingLink                    String?
+  meetingTool                    MeetingTool?
+  address                        String?
+  cancellationReason             String?
+  cancellationCutoffHours        Int                      @default(24)
+  lateCancellationRefundPercent  Decimal                  @default(50.00) @db.Decimal(5, 2)
+  cancellationOutcome            Json?
+  cancelledAt                    DateTime?
+  cancelledById                  String?
+  declineReason                  String?
+  recurringType                  RecurringType            @default(ONE_OFF)
+  recurringGroupId               String?
+  learnerTimezone                String?
+  tutorTimezone                  String?
+  version                        Int                      @default(1)
+  negotiationStatus              BookingNegotiationStatus @default(NONE)
+  createdAt                      DateTime                 @default(now())
+  updatedAt                      DateTime                 @updatedAt
+  completedAt                    DateTime?
+  completionReviewStatus         CompletionReviewStatus?
+  completionReviewDueAt          DateTime?
+  completionDisputedAt           DateTime?
+  completionDisputeReason        String?
+  completionReviewResolvedAt     DateTime?
+  completionReviewResolvedById   String?
+  completionReviewResolutionNote String?
+  completionResolution           CompletionResolution?
+
+  learner                    User                   @relation("LearnerBookings", fields: [learnerId], references: [id])
+  tutorProfile               TutorProfile           @relation("TutorBookings", fields: [tutorId], references: [id])
+  payment                    Payment?
+  statusHistory              BookingStatusHistory[]
+  rescheduleRequests         RescheduleRequest[]
+  priceOffers                BookingPriceOffer[]
+  creditTransactions         CreditTransaction[]
+  review                     Review?
+  completionReviewResolvedBy User?                  @relation("CompletionReviewResolver", fields: [completionReviewResolvedById], references: [id], onDelete: SetNull)
+
+  @@index([learnerId])
+  @@index([tutorId])
+  @@index([status])
+  @@index([scheduledAt])
+  @@index([completionReviewStatus, completionReviewDueAt])
+  @@index([learnerId, tutorId, isTrialLesson, status], map: "bookings_trial_lesson_eligibility_idx")
+  @@map("bookings")
+}
+
+model Review {
+  id             String   @id @default(uuid())
+  bookingId      String   @unique
+  learnerId      String
+  tutorProfileId String
+  rating         Int
+  comment        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  booking      Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  learner      User         @relation("LearnerReviews", fields: [learnerId], references: [id], onDelete: Cascade)
+  tutorProfile TutorProfile @relation(fields: [tutorProfileId], references: [id], onDelete: Cascade)
+
+  @@index([learnerId])
+  @@index([tutorProfileId])
+  @@index([createdAt])
+  @@map("reviews")
+}
+
+model BookingStatusHistory {
+  id        String        @id @default(uuid())
+  bookingId String
+  status    BookingStatus
+  reason    String?
+  createdAt DateTime      @default(now())
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@map("booking_status_history")
+}
+
+model RescheduleRequest {
+  id                  String                  @id @default(uuid())
+  bookingId           String
+  learnerId           String
+  tutorId             String
+  currentScheduledAt  DateTime
+  proposedScheduledAt DateTime
+  reason              String
+  proposedBy          BookingProposalActor    @default(LEARNER)
+  status              RescheduleRequestStatus @default(PENDING)
+  decisionReason      String?
+  decidedById         String?
+  decidedAt           DateTime?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  booking   Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  learner   User         @relation("LearnerRescheduleRequests", fields: [learnerId], references: [id], onDelete: Cascade)
+  tutor     TutorProfile @relation("TutorRescheduleRequests", fields: [tutorId], references: [id], onDelete: Cascade)
+  decidedBy User?        @relation("DecidedRescheduleRequests", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@index([bookingId])
+  @@index([learnerId])
+  @@index([tutorId])
+  @@index([decidedById])
+  @@index([status])
+  @@map("reschedule_requests")
+}
+
+model BookingPriceOffer {
+  id            String                  @id @default(uuid())
+  bookingId     String
+  originalTotal Decimal                 @db.Decimal(10, 2)
+  proposedTotal Decimal                 @db.Decimal(10, 2)
+  currency      String                  @default("AUD")
+  reason        String?
+  status        BookingPriceOfferStatus @default(PENDING)
+  createdById   String
+  respondedById String?
+  respondedAt   DateTime?
+  withdrawnById String?
+  withdrawnAt   DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId, status])
+  @@index([createdAt])
+  @@map("booking_price_offers")
+}
+
+// ==================== MESSAGING ====================
+
+model Conversation {
+  id                     String             @id @default(uuid())
+  type                   ConversationType   @default(DIRECT)
+  status                 ConversationStatus @default(OPEN)
+  supportRequesterId     String?
+  supportAssignedAdminId String?
+  closedById             String?
+  closedAt               DateTime?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  @@index([type])
+  @@index([status])
+  @@index([supportRequesterId])
+  @@index([supportAssignedAdminId])
+  @@map("conversations")
+}
+
+model ConversationParticipant {
+  id             String    @id @default(uuid())
+  conversationId String
+  userId         String
+  lastReadAt     DateTime?
+  joinedAt       DateTime  @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@map("conversation_participants")
+}
+
+model Message {
+  id                   String        @id @default(uuid())
+  conversationId       String
+  senderId             String
+  receiverId           String
+  content              String
+  status               MessageStatus @default(SENT)
+  attachmentUrl        String?
+  attachmentType       String?
+  attachmentName       String?
+  attachmentSize       Int?
+  attachmentStorageKey String?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation("SentMessages", fields: [senderId], references: [id])
+  receiver     User         @relation("ReceivedMessages", fields: [receiverId], references: [id])
+
+  @@index([conversationId])
+  @@index([senderId])
+  @@index([receiverId])
+  @@map("messages")
+}
+
+// ==================== PAYMENTS & SUBSCRIPTIONS ====================
+
+// Provider objects for explicitly enabled local Fake Payment only.
+model FakePaymentObject {
+  id        String   @id
+  kind      String
+  data      Json
+  idempotencyKey String? @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("fake_payment_objects")
+}
+
+model Subscription {
+  id                 String             @id @default(uuid())
+  userId             String             @unique
+  plan               SubscriptionPlan   @default(FREE)
+  status             SubscriptionStatus @default(ACTIVE)
+  stripeCustomerId   String?
+  stripePriceId      String?
+  stripeSubId        String?
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  cancelAtPeriodEnd  Boolean            @default(false)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model Payment {
+  id                       String                 @id @default(uuid())
+  userId                   String
+  bookingId                String?                @unique
+  amount                   Decimal                @db.Decimal(10, 2)
+  currency                 String                 @default("AUD")
+  status                   PaymentStatus          @default(PENDING)
+  stripePaymentId          String?
+  stripeSessionId          String?
+  stripeCustomerId         String?
+  stripePaymentMethodId    String?
+  stripeSetupIntentId      String?
+  stripePaymentIntentId    String?
+  stripeIdempotencyKey     String?                @unique
+  acceptanceAttemptCount   Int                    @default(0)
+  processingStartedAt      DateTime?
+  paymentAttemptToken      String?
+  acceptanceMode           PaymentAcceptanceMode?
+  acceptanceAuthorizedById String?
+  acceptanceAuthorizedAt   DateTime?
+  acceptanceBookingVersion Int?
+  acceptanceMeetingLink    String?
+  description              String?
+  // Platform fee / commission
+  platformFeePercent       Decimal?               @db.Decimal(5, 2) // e.g. 15.00 for 15%
+  platformFeeAmount        Decimal?               @db.Decimal(10, 2) // actual $ amount kept by platform
+  tutorPayoutAmount        Decimal?               @db.Decimal(10, 2) // amount sent to tutor
+  payoutStatus             PayoutStatus?
+  payoutPendingAt          DateTime?
+  payoutEligibleAt         DateTime?
+  payoutAt                 DateTime?
+  payoutFailedAt           DateTime?
+  payoutFailureReason      String?
+  processedAt              DateTime?
+  paidAt                   DateTime?
+  failedAt                 DateTime?
+  failureReason            String?
+  creditApplied            Decimal?               @db.Decimal(10, 2)
+  refundAmount             Decimal?               @db.Decimal(10, 2)
+  refundedAt               DateTime?
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+
+  user                User                 @relation(fields: [userId], references: [id])
+  booking             Booking?             @relation(fields: [bookingId], references: [id])
+  attempts            PaymentAttempt[]
+  payoutTransferItems PayoutTransferItem[]
+  refund              PaymentRefund?
+
+  @@index([userId])
+  @@index([status])
+  @@index([payoutStatus])
+  @@index([stripePaymentIntentId])
+  @@index([stripeSetupIntentId])
+  @@map("payments")
+}
+
+/// A provider refund requested as the final outcome of a post-lesson
+/// non-completion decision. The unique payment relation and idempotency key
+/// ensure an occurrence cannot receive two PAY-08 refunds.
+model PaymentRefund {
+  id             String       @id @default(uuid())
+  paymentId      String       @unique
+  initiatedById  String
+  source         RefundSource
+  amount         Decimal      @db.Decimal(10, 2)
+  currency       String       @default("AUD")
+  status         RefundStatus @default(PROCESSING)
+  attemptCount   Int          @default(0)
+  resolutionNote String
+  failureReason  String?
+  requestedAt    DateTime     @default(now())
+  failedAt       DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  payment     Payment                @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  initiatedBy User                   @relation("RefundInitiator", fields: [initiatedById], references: [id])
+  attempts    PaymentRefundAttempt[]
+
+  @@index([status, requestedAt])
+  @@index([initiatedById, requestedAt])
+  @@map("payment_refunds")
+}
+
+model PaymentRefundAttempt {
+  id                       String       @id @default(uuid())
+  refundId                 String
+  sequence                 Int
+  status                   RefundStatus @default(PROCESSING)
+  providerRefundId         String?      @unique
+  providerStatus           String?
+  providerRequestStartedAt DateTime?
+  idempotencyKey           String       @unique
+  failureReason            String?
+  attemptedAt              DateTime     @default(now())
+  failedAt                 DateTime?
+  completedAt              DateTime?
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
+
+  refund PaymentRefund @relation(fields: [refundId], references: [id], onDelete: Cascade)
+
+  @@unique([refundId, sequence])
+  @@index([refundId, attemptedAt])
+  @@index([status, attemptedAt])
+  @@map("payment_refund_attempts")
+}
+
+model PayoutRun {
+  id                      String          @id @default(uuid())
+  initiatedByAdminId      String
+  status                  PayoutRunStatus @default(PROCESSING)
+  paymentCount            Int             @default(0)
+  transferCount           Int             @default(0)
+  successfulTransferCount Int             @default(0)
+  failedTransferCount     Int             @default(0)
+  startedAt               DateTime        @default(now())
+  completedAt             DateTime?
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+
+  initiatedByAdmin User             @relation("PayoutRunAdmin", fields: [initiatedByAdminId], references: [id])
+  transfers        PayoutTransfer[]
+
+  @@index([status, createdAt])
+  @@index([initiatedByAdminId, createdAt])
+  @@map("payout_runs")
+}
+
+model PayoutTransfer {
+  id                 String               @id @default(uuid())
+  payoutRunId        String
+  tutorProfileId     String
+  amount             Decimal              @db.Decimal(10, 2)
+  currency           String               @default("AUD")
+  status             PayoutTransferStatus @default(PROCESSING)
+  providerTransferId String?              @unique
+  idempotencyKey     String               @unique
+  failureReason      String?
+  attemptedAt        DateTime             @default(now())
+  completedAt        DateTime?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  payoutRun    PayoutRun            @relation(fields: [payoutRunId], references: [id], onDelete: Cascade)
+  tutorProfile TutorProfile         @relation(fields: [tutorProfileId], references: [id])
+  items        PayoutTransferItem[]
+
+  @@index([payoutRunId])
+  @@index([tutorProfileId, createdAt])
+  @@index([status])
+  @@map("payout_transfers")
+}
+
+model PayoutTransferItem {
+  id               String   @id @default(uuid())
+  payoutTransferId String
+  paymentId        String
+  amount           Decimal  @db.Decimal(10, 2)
+  createdAt        DateTime @default(now())
+
+  payoutTransfer PayoutTransfer @relation(fields: [payoutTransferId], references: [id], onDelete: Cascade)
+  payment        Payment        @relation(fields: [paymentId], references: [id])
+
+  @@unique([payoutTransferId, paymentId])
+  @@index([paymentId])
+  @@map("payout_transfer_items")
+}
+
+model PaymentAttempt {
+  id                String                @id @default(uuid())
+  paymentId         String
+  sequence          Int
+  source            PaymentAttemptSource
+  outcome           PaymentAttemptOutcome
+  initiatedByUserId String?
+  initiatedByRole   Role?
+  bookingVersion    Int
+  acceptanceMode    PaymentAcceptanceMode
+  providerCode      String?
+  safeFailureReason String?
+  startedAt         DateTime              @default(now())
+  completedAt       DateTime?
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentId, sequence])
+  @@index([paymentId, startedAt])
+  @@index([outcome])
+  @@map("payment_attempts")
+}
+
+model StripeWebhookEvent {
+  eventId     String   @id
+  type        String
+  objectId    String?
+  processedAt DateTime @default(now())
+
+  @@index([type])
+  @@index([objectId])
+  @@map("stripe_webhook_events")
+}
+
+model CreditTransaction {
+  id        String                @id @default(uuid())
+  userId    String
+  bookingId String?
+  amount    Decimal               @db.Decimal(10, 2)
+  currency  String                @default("AUD")
+  type      CreditTransactionType
+  reason    String?
+  createdAt DateTime              @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([bookingId])
+  @@map("credit_transactions")
+}
+
+// ==================== ADMIN ====================
+
+model AdminAction {
+  id           String   @id @default(uuid())
+  adminId      String
+  targetUserId String?
+  action       String
+  description  String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  admin      User  @relation("AdminActioner", fields: [adminId], references: [id])
+  targetUser User? @relation("AdminTarget", fields: [targetUserId], references: [id])
+
+  @@map("admin_actions")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@map("refresh_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+// ==================== NOTIFICATION ====================
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String   @default("system") // system, message, booking, payment
+  title     String
+  message   String
+  timestamp DateTime @default(now())
+  read      Boolean  @default(false)
+  link      String
+
+  user User @relation("Notification", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("notifications")
+}
