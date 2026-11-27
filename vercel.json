@@ -3,11 +3,11 @@
   "rewrites": [
     {
       "source": "/api/v1/:path*",
-      "destination": "tutorconnect-backend-production-16d8e945.up.railway.app/api/v1/:path*"
+      "destination": "https://tutorconnect-backend-production-16d8e945.up.railway.app/api/v1/:path*"
     },
     {
       "source": "/uploads/:path*",
-      "destination": "tutorconnect-backend-production-16d8e945.up.railway.app/uploads/:path*"
+      "destination": "https://tutorconnect-backend-production-16d8e945.up.railway.app/uploads/:path*"
     }
   ]
 }
